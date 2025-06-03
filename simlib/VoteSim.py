@@ -11,11 +11,13 @@ class VotingSimulation:
                  spread_radius=10,
                  dimension=2):
         """
-        num_voters:       选民数量
-        num_candidates:   候选人/提案数量（至少 2）
-        center:           生成选民、候选人的“中心点”（默认为 [0,0]）
-        spread_radius:    选民和候选人分布时的最大半径范围
-        dimension:        维度（目前只支持二维可视化）
+        Initialize a voting simulation.
+
+        num_voters:       Number of voters
+        num_candidates:   Number of candidates/proposals (at least 2)
+        center:           The "center point" for generating voter and candidate positions (default [0, 0])
+        spread_radius:    Maximum radius for distributing voters and candidates
+        dimension:        Dimensionality (currently only 2D visualization is supported)
         """
         self.num_voters = num_voters
         self.num_candidates = num_candidates
@@ -23,110 +25,111 @@ class VotingSimulation:
         self.spread_radius = spread_radius
         self.dimension = dimension
 
-        # 为每个候选人预先分配一个“恒定颜色”
+        # Assign a constant color to each candidate
         cmap_name = 'tab10' if self.num_candidates <= 10 else 'tab20'
         cmap = plt.cm.get_cmap(cmap_name, max(self.num_candidates, 10))
         self.cand_colors = [cmap(i) for i in range(self.num_candidates)]
 
-        # 初始化时生成选民和候选人位置
+        # Generate initial voter and candidate positions
         self.voters = self._generate_voters(self.center)
         self.candidates = self._generate_candidates(self.center)
-        self.votes = None  # 用于储存每个选民投票给哪个候选人（索引列表）
+        self.votes = None  # To store which candidate each voter voted for (indices 0..num_candidates-1)
 
     def _generate_voters(self, center):
         """
-        在一个圆形范围内生成 (num_voters - 1) 个随机点（角度均匀，半径 ~ sqrt(uniform)*spread_radius），
-        然后第 N 个点作为补偿，使得所有点质心在 center。
+        Generate (num_voters - 1) random points inside a circle (angles uniform,
+        radii ~ sqrt(uniform) * spread_radius), then compute a compensating point
+        so that the centroid is exactly at center.
         """
         angles = np.random.uniform(0, 2 * np.pi, self.num_voters - 1)
         radii = np.sqrt(np.random.uniform(0, 1, self.num_voters - 1)) * self.spread_radius
         x = radii * np.cos(angles)
         y = radii * np.sin(angles)
-        raw = np.column_stack([x, y])  # 形状 (N-1, 2)
+        raw = np.column_stack([x, y])  # Shape (num_voters - 1, 2)
 
-        # 补偿点 = －(前面所有点向量和)，保证质心在 (0,0) 然后整体平移到 center
+        # Compensating point = -sum of the above points, to ensure centroid at (0,0), then shift to center
         last = -np.sum(raw, axis=0)
         voters = np.vstack([raw, last]) + center
-        return voters  # 形状 (N, 2)
+        return voters  # Shape (num_voters, 2)
 
     def _generate_candidates(self, center):
         """
-        在同样的圆形范围内，均匀随机生成 num_candidates 个候选人坐标，最后平移到 center。
+        Generate num_candidates random candidate coordinates inside a circle
+        (uniform angles, radii ~ sqrt(uniform) * spread_radius), then shift to center.
         """
         angles = np.random.uniform(0, 2 * np.pi, self.num_candidates)
         radii = np.sqrt(np.random.uniform(0, 1, self.num_candidates)) * self.spread_radius
         x = radii * np.cos(angles)
         y = radii * np.sin(angles)
-        return np.column_stack([x, y]) + center  # 形状 (num_candidates, 2)
+        return np.column_stack([x, y]) + center  # Shape (num_candidates, 2)
 
     def vote(self):
         """
-        执行一次投票：每个选民计算到各候选人的距离，并将票投给最近的那个候选人。
-        结果保存在 self.votes，这是一个长度为 num_voters 的整数数组（0..num_candidates-1）。
+        Perform one round of voting: each voter computes distances to all candidates
+        and votes for the nearest one. Results are saved in self.votes as an array of length num_voters.
         """
         distances = np.linalg.norm(
             self.voters[:, np.newaxis, :] - self.candidates[np.newaxis, :, :],
             axis=2
-        )  # 结果形状 (num_voters, num_candidates)
+        )  # Shape (num_voters, num_candidates)
 
         self.votes = np.argmin(distances, axis=1)
 
     def get_result(self):
         """
-        打印格式化后的投票结果（每一行 "C0: xx", "C1: yy", ...）。
-        如果还没投票，就先执行一次 vote()。
+        Print formatted voting results ("C0: xx", "C1: yy", ...). If voting hasn't occurred yet, run vote() first.
         """
         if self.votes is None:
             self.vote()
         counts = Counter(self.votes)
-        print("投票结果：")
+        print("Voting results:")
         for i in range(self.num_candidates):
             print(f"  C{i}: {counts.get(i, 0)}")
 
     def plot(self):
         """
-        将主要选民群体、候选人、选民中心绘制出来：
-          1. 先算出选民重心 voter_center；
-          2. 计算每个选民到 voter_center 的距离，取 95% 分位数 R95，只画主要簇内的选民；
-          3. 支持者按不同候选人分配不同颜色；
-          4. 赢家候选人用金色 (gold)，其它候选人用红色 (red)；但在标注边框和编号时仍用 self.cand_colors；
-          5. 在图上标出选民质心，并加一个明显的标注；
-          6. 右上角图例中，“Voters (main cluster)” 的颜色与得票最多的候选人保持一致。
-        如果还没投票，就先执行一次 vote()。
+        Plot voters, candidates, and voter centroid:
+          1. Compute voter centroid (voter_center).
+          2. Compute each voter's distance to centroid, take 95th percentile R95, and plot only the main cluster.
+          3. Color supporters by their chosen candidate.
+          4. Winner candidate in gold, others in red; border color uses self.cand_colors.
+          5. Mark the voter centroid with a distinct marker and label.
+          6. Legend in the top-right: "Voters (main cluster)" uses the color of the winning candidate.
+        If voting hasn't occurred yet, run vote() first.
         """
         if self.dimension != 2:
-            print("目前仅支持二维可视化")
+            print("Currently only 2D visualization is supported")
             return
 
         if self.votes is None:
             self.vote()
 
-        # （A）计算选民重心
+        # (A) Compute voter centroid
         voter_center = np.mean(self.voters, axis=0)
 
-        # （B）算出每个选民到重心的距离 d_i
+        # (B) Distances of each voter to the centroid
         diffs = self.voters - voter_center
         dists = np.linalg.norm(diffs, axis=1)
 
-        # （C）取 95% 分位数作为阈值 R95
+        # (C) 95th percentile as threshold R95
         R95 = np.percentile(dists, 95)
 
-        # 留一点小边距，防止点正好在边界处被切掉
+        # Small margin to avoid cutting off points exactly on the boundary
         margin = self.spread_radius * 0.05
 
-        # （D）确定要绘制的“主要选民”索引
+        # (D) Mask for main cluster voters
         main_mask = dists <= R95
 
-        # （E）为每个选民分配一种颜色（按 self.votes 和 self.cand_colors）
+        # (E) Assign colors to each voter by their chosen candidate
         voter_colors = [self.cand_colors[v] for v in self.votes]
 
-        # （F）统计得票情况并找出“赢家”索引
+        # (F) Determine winner index
         counts = Counter(self.votes)
         winner = max(range(self.num_candidates), key=lambda i: counts.get(i, 0))
 
         plt.figure(figsize=(8, 8))
 
-        # 只画 main_mask==True 的选民，但不带 label，用一个 proxy 在图例里显示
+        # Plot only main-cluster voters; no label (use proxy in legend)
         plt.scatter(self.voters[main_mask, 0],
                     self.voters[main_mask, 1],
                     c=np.array(voter_colors)[main_mask],
@@ -134,7 +137,7 @@ class VotingSimulation:
                     edgecolors='black',
                     linewidths=0.3)
 
-        # （G）绘制候选人：赢家金色、其它红色，边框用 self.cand_colors[idx]
+        # (G) Plot candidates: winner in gold, others in red; borders with self.cand_colors[idx]
         for idx, cand in enumerate(self.candidates):
             if idx == winner:
                 facecolor = 'gold'
@@ -151,7 +154,7 @@ class VotingSimulation:
                         s=size,
                         linewidths=2,
                         zorder=5)
-            # 在点上写上 “C0, C1, ...” 并用边框颜色突出编号含义
+            # Label "C0, C1, ..." with border color
             plt.text(cand[0], cand[1], f'C{idx}',
                      fontsize=12, ha='center', va='center',
                      color='white',
@@ -160,7 +163,7 @@ class VotingSimulation:
                                boxstyle='circle,pad=0.3'),
                      zorder=6)
 
-        # （H）在图上标出选民重心
+        # (H) Mark voter centroid
         plt.scatter(voter_center[0], voter_center[1],
                     c='black', marker='*', s=200, zorder=7)
         plt.text(voter_center[0], voter_center[1], '  Voter Center',
@@ -168,15 +171,14 @@ class VotingSimulation:
                  bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.2'),
                  zorder=8)
 
-        # （I）设置坐标轴范围：以 voter_center 为中心，±(R95 + margin)
+        # (I) Set axis limits around voter_center ± (R95 + margin)
         lim = R95 + margin
         plt.xlim(voter_center[0] - lim, voter_center[0] + lim)
         plt.ylim(voter_center[1] - lim, voter_center[1] + lim)
         plt.axis('equal')
         plt.grid(True)
 
-        # （J）制作图例：Voters (main cluster) 用 winner 的颜色，其它可根据需要自行添加
-        # 这里只演示将 Voters (main cluster) 用得票最多的候选人颜色：
+        # (J) Legend: "Voters (main cluster)" in winner's color
         proxy_voter = mpatches.Patch(color=self.cand_colors[winner],
                                      label='Voters (main cluster)')
         plt.legend(handles=[proxy_voter], loc='upper right')
@@ -184,90 +186,95 @@ class VotingSimulation:
         plt.title("Voting Simulation")
         plt.show()
 
-    # ----------------- 修改：execute 默认使用 random_walk -----------------
     def execute(self, change_func=None, **kwargs):
         """
-        让选民按照一定策略“移动”一次。
-        默认情况下（不传入 change_func），会执行 random_walk。
-        如果要按照其它逻辑移动选民，则传入 change_func(simulation, **kwargs)。
+        Move voters according to a specified strategy.
+        By default (no change_func), perform a random walk.
+        To apply a custom logic, pass change_func(simulation, **kwargs).
         """
         if change_func is None:
-            # 默认使用随机游走
+            # Default: random walk for voters
             random_walk(self, **kwargs)
         else:
             change_func(self, **kwargs)
-        # 注意：不再自动调用 vote()，如果移动后需要新一轮投票，请手动再调用 vote()。
+        # Note: vote() is NOT automatically called after movement. Call sim.vote() if you want a new round.
 
-    # ----------------- 修改：propose 去掉 mode，只考虑一个函数 -----------------
     def propose(self, change_func=None, **kwargs):
         """
-        让候选人按照一定策略“移动”或“更新”一次。默认情况下（不传入 change_func），
-        会对候选人执行随机游走（candidate_random_walk）。
-
-        如果要按自定义逻辑生成/演化候选人位置，则传入 change_func(simulation, **kwargs)，
-        该函数应修改 sim.candidates。
-
-        参数：
-          - change_func: 函数签名应为 change_func(sim: VotingSimulation, **kwargs)，
-                         接收当前的 sim 对象，并在内部修改 sim.candidates。
-                         如果为 None，则默认使用 candidate_random_walk。
-          - kwargs: 额外参数，会原样传给 change_func(sim, **kwargs)。
+        Move or update candidates according to a specified strategy.
+        By default (no change_func), perform a random walk for candidates.
+        To use custom logic, pass change_func(simulation, **kwargs) which should modify sim.candidates.
+        After proposing, previous vote results are reset; call sim.vote() again if needed.
         """
         if change_func is None:
-            # 默认对候选人执行随机游走
+            # Default: random walk for candidates
             candidate_random_walk(self, **kwargs)
         else:
             change_func(self, **kwargs)
 
-        # 重置之前的投票结果，下一轮再调用 vote()
+        # Reset previous voting results; call vote() for the next round.
         self.votes = None
 
 
-# ----------------- 新增：对候选人做随机游走的函数 -----------------
+# ----------------- Candidate random walk -----------------
 def candidate_random_walk(sim: VotingSimulation, step_size=1.0):
     """
-    对每个候选人的坐标都加一个独立的高斯噪声（随机游走）。
-    step_size: 随机步长的尺度，相当于标准差。
+    Add independent Gaussian noise to each candidate's coordinates (random walk).
+    step_size: standard deviation of the noise.
     """
     sim.candidates += np.random.normal(loc=0.0,
                                        scale=step_size,
                                        size=sim.candidates.shape)
 
 
-# 以下保留你之前定义的演化函数等（如果你还需要的话）
+# ----------------- Move candidates toward voter centroid -----------------
 def evolve_towards_voter_center(sim: VotingSimulation, fraction=0.2):
     """
-    让每个候选人都朝着当前选民质心移动一小段距离，
-    fraction=0.2 表示每次跨过去 20% 的距离。
-    返回形状为 (sim.num_candidates, 2) 的新位置数组。
+    Move each candidate a fraction of the way toward the current voter centroid.
+    fraction=0.2 means moving 20% of the distance each call.
     """
     voter_center = np.mean(sim.voters, axis=0)
-    directions = voter_center - sim.candidates  # 大小 (num_candidates, 2)
-    new_pos = sim.candidates + fraction * directions
-    sim.candidates = new_pos
+    directions = voter_center - sim.candidates  # Shape (num_candidates, 2)
+    sim.candidates = sim.candidates + fraction * directions
 
+
+# ----------------- Move candidates away from voter centroid (inverse) -----------------
+def evolve_away_from_voter_center(sim: VotingSimulation, fraction=0.2):
+    """
+    Move each candidate a fraction of the way away from the current voter centroid.
+    fraction=0.2 means moving 20% of the distance each call.
+    """
+    voter_center = np.mean(sim.voters, axis=0)
+    directions = sim.candidates - voter_center  # Reverse direction
+    sim.candidates = sim.candidates + fraction * directions
+
+
+# ----------------- Add Gaussian noise to candidates -----------------
 def evolve_add_noise(sim: VotingSimulation, noise_std=1.0):
     """
-    给每个候选人位置都加一个独立的高斯噪声，标准差为 noise_std。
-    返回一个 (num_candidates, 2) 大小的数组。
+    Add independent Gaussian noise to each candidate's position.
+    noise_std: standard deviation of the noise.
     """
     noise = np.random.normal(loc=0.0, scale=noise_std,
                              size=sim.candidates.shape)
     sim.candidates = sim.candidates + noise
 
+
+# ----------------- Random walk for voters -----------------
 def random_walk(sim: VotingSimulation, step_size=1.0):
     """
-    sim: VotingSimulation 对象
-    step_size: 标准差，表示随机步长的尺度
-    对所有选民执行随机游走。
+    Move all voters by adding Gaussian noise to their positions.
+    step_size: standard deviation of the noise.
     """
     sim.voters += np.random.normal(loc=0.0, scale=step_size, size=sim.voters.shape)
 
+
+# ----------------- Move voters toward the winner -----------------
 def move_towards_winner(sim: VotingSimulation, fraction=0.1):
     """
-    先确保已有一次投票结果，再计算赢家（得票数最多的候选人），
-    然后把每个选民沿着自己到赢家候选人的方向前进 fraction（0~1）距离。
-    fraction=0.1 意味着每次只走 10% 的距离。
+    Ensure voting has occurred at least once. Compute the winner (most votes),
+    then move each voter a fraction of the way toward that winner.
+    fraction=0.1 means moving 10% of the distance each call.
     """
     if sim.votes is None:
         sim.vote()
@@ -277,11 +284,70 @@ def move_towards_winner(sim: VotingSimulation, fraction=0.1):
     directions = winner_pos - sim.voters
     sim.voters = sim.voters + fraction * directions
 
+
+# ----------------- Probabilistic move toward or away from the winner -----------------
+def probabilistic_move_towards_winner(sim: VotingSimulation, fraction=0.1):
+    """
+    Based on the most recent vote results, identify the winning candidate.
+    Compute A = mean distance of all voters to the winner (using the winner's current position).
+    For each voter i, let B_i = distance of voter i to the winner.
+    The probability p_i = B_i / (A + B_i) that voter i moves TOWARD the winner by distance (fraction * A).
+    Otherwise, the voter moves AWAY from the winner by the same distance (fraction * A).
+    If a voter is exactly at the winner's position (B_i == 0), no movement occurs for that voter.
+    """
+    if sim.votes is None:
+        sim.vote()
+
+    counts = Counter(sim.votes)
+    winner = max(range(sim.num_candidates), key=lambda i: counts.get(i, 0))
+    winner_pos = sim.candidates[winner]  # Use current winner position
+
+    # Compute distances B_i for each voter
+    diffs = winner_pos - sim.voters  # Shape (num_voters, 2)
+    B = np.linalg.norm(diffs, axis=1)  # Shape (num_voters,)
+
+    # Compute A = average distance
+    A = np.mean(B)
+
+    if A == 0:
+        # All voters are exactly at the winner position; no movement
+        return
+
+    # Distance each voter should move: fraction * A
+    move_distance = fraction * A
+
+    # For voters with B_i > 0, compute unit direction vectors
+    nonzero_mask = B > 0
+    unit_dirs = np.zeros_like(diffs)
+    unit_dirs[nonzero_mask] = diffs[nonzero_mask] / B[nonzero_mask, np.newaxis]
+
+    # Compute probabilities p_i = B_i / (A + B_i)
+    p = np.zeros_like(B)
+    p[nonzero_mask] = B[nonzero_mask] / (A + B[nonzero_mask])
+
+    # Sample uniform random numbers to decide movement direction
+    rand_vals = np.random.uniform(0, 1, size=B.shape)
+
+    # Move each voter accordingly
+    for i in range(sim.num_voters):
+        if B[i] == 0:
+            # Voter exactly at winner position: no movement
+            continue
+        if rand_vals[i] < p[i]:
+            # Move toward the winner by move_distance
+            sim.voters[i] += unit_dirs[i] * move_distance
+        else:
+            # Move away from the winner by move_distance
+            sim.voters[i] -= unit_dirs[i] * move_distance
+
+
+# ----------------- Cluster attraction: move outermost voters toward centroid -----------------
 def cluster_attraction(sim: VotingSimulation, cluster_pct=0.2):
     """
-    先计算所有选民的质心，然后把离质心最远的 cluster_pct 比例的选民，
-    往质心方向移动一小步；其余选民不变。模拟“中心势力”吸引边缘选民。
-    cluster_pct: 比如 0.2 表示最远 20% 的选民会向中心靠拢。
+    Compute the centroid of all voters. Identify the top cluster_pct fraction of voters
+    farthest from the centroid, and move them a small step (5% of their distance) toward the centroid.
+    Remaining voters stay in place.
+    cluster_pct: fraction (e.g., 0.2 means the farthest 20% move).
     """
     center = np.mean(sim.voters, axis=0)
     dists = np.linalg.norm(sim.voters - center, axis=1)
@@ -289,4 +355,3 @@ def cluster_attraction(sim: VotingSimulation, cluster_pct=0.2):
     mask = dists >= threshold
     directions = center - sim.voters[mask]
     sim.voters[mask] = sim.voters[mask] + 0.05 * directions
-
