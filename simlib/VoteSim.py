@@ -37,15 +37,28 @@ class VotingSimulation:
 
     def _generate_voters(self, center):
         """
-        Generate (num_voters - 1) random points inside a circle (angles uniform,
-        radii ~ sqrt(uniform) * spread_radius), then compute a compensating point
-        so that the centroid is exactly at center.
+        Generate (num_voters - 1) random points inside a circle following a radial normal distribution,
+        then compute a compensating point so that the centroid is exactly at center.
+        Radial distances are drawn from a normal distribution centered at 0 with standard deviation
+        self.spread_radius/2, truncated to [0, self.spread_radius].
         """
-        angles = np.random.uniform(0, 2 * np.pi, self.num_voters - 1)
-        radii = np.sqrt(np.random.uniform(0, 1, self.num_voters - 1)) * self.spread_radius
+        n = self.num_voters - 1
+
+        # Draw radial distances from a truncated normal distribution
+        radii = []
+        sigma = self.spread_radius / 2
+        while len(radii) < n:
+            samples = np.random.normal(loc=0, scale=sigma, size=(n - len(radii)))
+            abs_samples = np.abs(samples)
+            valid = abs_samples[abs_samples <= self.spread_radius]
+            radii.extend(valid.tolist())
+        radii = np.array(radii[:n])
+
+        # Uniform angles for random directions
+        angles = np.random.uniform(0, 2 * np.pi, n)
         x = radii * np.cos(angles)
         y = radii * np.sin(angles)
-        raw = np.column_stack([x, y])  # Shape (num_voters - 1, 2)
+        raw = np.column_stack([x, y])  # Shape (n, 2)
 
         # Compensating point = -sum of the above points, to ensure centroid at (0,0), then shift to center
         last = -np.sum(raw, axis=0)
@@ -355,3 +368,32 @@ def cluster_attraction(sim: VotingSimulation, cluster_pct=0.2):
     mask = dists >= threshold
     directions = center - sim.voters[mask]
     sim.voters[mask] = sim.voters[mask] + 0.05 * directions
+
+
+# ----------------- Winner-only random walk for candidates -----------------
+def winner_random_walk(sim: VotingSimulation, step_size=1.0):
+    """
+    Move only the winning candidate by adding Gaussian noise to its position.
+    step_size: standard deviation of the noise.
+    """
+    if sim.votes is None:
+        sim.vote()
+    counts = Counter(sim.votes)
+    winner = max(range(sim.num_candidates), key=lambda i: counts.get(i, 0))
+    noise = np.random.normal(loc=0.0, scale=step_size, size=sim.candidates[winner].shape)
+    sim.candidates[winner] += noise
+
+
+# ----------------- Winner-only move away from voter centroid -----------------
+def winner_move_away_from_voter_center(sim: VotingSimulation, fraction=0.2):
+    """
+    Move only the winning candidate a fraction of the way away from the voter centroid.
+    fraction: fraction of the distance to move.
+    """
+    if sim.votes is None:
+        sim.vote()
+    counts = Counter(sim.votes)
+    winner = max(range(sim.num_candidates), key=lambda i: counts.get(i, 0))
+    voter_center = np.mean(sim.voters, axis=0)
+    direction = sim.candidates[winner] - voter_center
+    sim.candidates[winner] += fraction * direction
